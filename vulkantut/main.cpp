@@ -236,6 +236,31 @@ struct SwapChainSupportDetails {
   vector<VkPresentModeKHR> presentModes;
 };
 
+
+class Window {
+public:
+  GLFWwindow* glfw_window;
+
+  Window() {
+    glfwInit();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); 
+    glfw_window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
+  }
+
+  ~Window() {
+    glfwDestroyWindow(glfw_window);
+    glfwTerminate();
+  }
+};
+
+class BetterTriangle {
+  
+public:
+  BetterTriangle() {
+  }
+};
+
 class HelloTriangleApplication {
 public:
   void run() {
@@ -1103,7 +1128,18 @@ private: // methods
   }
 };
 
-int main() {
+//int mai22n() {
+//  Window w;
+//
+//  while (!glfwWindowShouldClose(w.glfw_window)) {
+//    glfwPollEvents();
+//    drawFrame();
+//  }
+//
+//  vkDeviceWaitIdle(ldevice);
+//}
+//
+int mainold() {
   HelloTriangleApplication app;
 
   try {
