@@ -19,14 +19,36 @@
 #include <functional>
 #include <algorithm>
 #include <sstream>
+#include <memory>
 
 namespace utils {
   using namespace std;
+
+  template<typename T> using ptr = shared_ptr<T>;
+
+  template<typename T, typename... Args>
+  inline decltype(auto) mk_ptr(Args&&... args) {
+    return make_shared<T>(forward<Args>(args)...);
+  }
+
+  template<typename T> using uptr = unique_ptr<T>;
+
+  template<typename T, typename... Args>
+  inline decltype(auto) mk_uptr(Args&&... args) {
+    return make_unique<T>(forward<Args>(args)...);
+  }
 
   template<typename T, typename F, template <typename...> typename C, typename... Args>
   decltype(auto) map(const C<T, Args...>& coll, F f) {
     C<decltype(f(*coll.begin()))> res(coll.size());
     transform(coll.cbegin(), coll.cend(), res.begin(), f);
+    return res;
+  }
+
+  template<typename T, typename F, template <typename...> typename C, typename... Args>
+  decltype(auto) filter(const C<T, Args...>& coll, F f) {
+    C<T> res;
+    copy_if(coll.cbegin(), coll.end(), back_inserter(res), f);
     return res;
   }
 
