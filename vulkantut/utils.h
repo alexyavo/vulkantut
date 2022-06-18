@@ -28,6 +28,19 @@ namespace utils {
 
   template<typename T> using ptr = shared_ptr<T>;
 
+  /*
+   * what happens if:
+   * A has B
+   * B has C
+   * but A also has internal C of B (for convenience)
+   * 
+   * A is destroyed
+   * releases ref to B first, last ref held to that B 
+   * B is being destroyed
+   * C remains intact until A completes destruction
+   * if C points back / assumes B exists...
+   */
+
   template<typename T, typename... Args>
   inline decltype(auto) mk_ptr(Args&&... args) {
     return make_shared<T>(forward<Args>(args)...);
@@ -38,6 +51,17 @@ namespace utils {
   template<typename T, typename... Args>
   inline decltype(auto) mk_uptr(Args&&... args) {
     return make_unique<T>(forward<Args>(args)...);
+  }
+
+  // T isn't ideal? something about perfect parameter forwarding ? 
+  template<typename T, typename F, template <typename...> typename C, typename... Args>
+  optional<T> find(const C<T, Args...>& coll, F pred) {
+    for (auto it = coll.cbegin(); it != coll.cend(); ++it) {
+      if (pred(*it)) {
+        return *it;
+      }
+    }
+    return {};
   }
 
   template<typename T, typename F, template <typename...> typename C, typename... Args>
@@ -75,6 +99,11 @@ namespace utils {
   }
 
   template<typename T>
+  bool is_subset_of(const set<T>& subset, const set<T>& of) {
+    return std::includes(of.cbegin(), of.cend(), subset.cbegin(), subset.cend());
+  }
+
+  template<typename T>
   set<T> to_set(const vector<T>& vec) {
     return set(vec.cbegin(), vec.cend());
   }
@@ -84,11 +113,6 @@ namespace utils {
     vector<T> res;
     std::copy(s.cbegin(), s.cend(), std::back_inserter(res));
     return res;
-  }
-
-  template<typename T>
-  bool is_subset_of(const set<T>& subset, const set<T>& of) {
-    return std::includes(of.cbegin(), of.cend(), subset.cbegin(), subset.cend());
   }
 
   template<typename T, template <typename...> typename C, typename... Args>
@@ -121,5 +145,22 @@ namespace utils {
   template<typename T>
   string to_str(const set<T>& s) {
     return to_str(s, "{", ",", "}");
+  }
+
+  vector<char> read_file(const string& fname) {
+    ifstream file(fname, ios::ate | ios::binary);
+
+    if (!file.is_open()) {
+      throw runtime_error(format("failed to open {}", fname));
+    }
+
+    size_t fileSize = file.tellg();
+    vector<char> buffer(fileSize);
+
+    file.seekg(0);
+    file.read(buffer.data(), fileSize);
+    file.close();
+
+    return buffer;
   }
 }
