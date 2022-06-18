@@ -73,7 +73,7 @@ dbg_cb(
   void* pUserData
 ) {
   if (
-    severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT ||
+    //severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT ||
     severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT ||
     severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT ||
     severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
@@ -84,12 +84,40 @@ dbg_cb(
   return VK_FALSE;
 }
 
+
+/*
+ * VkDeviceQueueCreateInfo 
+ *
+ * queueFamilyIndex is an unsigned integer indicating the index of the queue
+ * family in which to create the queues on this device. This index corresponds
+ * to the index of an element of the pQueueFamilyProperties array that was
+ * returned by vkGetPhysicalDeviceQueueFamilyProperties.
+ * 
+ * So the flow is: 
+ * - get a physical device
+ * - get queue families
+ * - each queue has an index associated w/ it 
+ * - index needed to check "present support" on a specific surface
+ * - to create logical device you need to declare queue infos, you do this by passing the index of the queues
+ * - after creating the logical device you get device queue by index
+ */
+class QueueFamily {
+public:
+  const VkQueueFamilyProperties properties;
+  const uint32_t index;
+
+  QueueFamily(VkQueueFamilyProperties properties, uint32_t index) : properties(properties), index(index) {}
+
+  bool supports_graphics() const {
+    return properties.queueFlags & VK_QUEUE_GRAPHICS_BIT;
+  }
+};
+
 class PhysDevice {
   VkPhysicalDevice device;
 
 public:
   PhysDevice(VkPhysicalDevice device) : device(device) {}
-  PhysDevice() : device(nullptr) {} // placate compiler... "no appropriate default constructor available"
 
   VkPhysicalDevice get() { return device; }
 
@@ -104,7 +132,7 @@ public:
   }
 
   bool supports_extension(const char* extension) const {
-    for (auto ext : get_extensions()) {
+    for (auto& ext : get_extensions()) {
       if (strcmp(ext.extensionName, extension) == 0) {
         return true;
       }
@@ -123,14 +151,31 @@ public:
     return string(properties().deviceName);
   }
 
-  vector<VkQueueFamilyProperties> queue_families() const {
+  vector<QueueFamily> queue_families() const {
     uint32_t queueFamilyCount = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
 
-    vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+    vector<VkQueueFamilyProperties> properties(queueFamilyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, properties.data());
 
-    return queueFamilies;
+    return map_enumerated(
+      properties, 
+      [](u32 index, VkQueueFamilyProperties props) { return QueueFamily(props, index); }
+    );
+  }
+
+  vector<QueueFamily> graphics_queue_families() const {
+    return filter(
+      queue_families(),
+      [](const QueueFamily& qfam) { return qfam.supports_graphics(); }
+    );
+  }
+
+  vector<QueueFamily> present_queue_families(VkSurfaceKHR surface) const {
+    return filter(
+      queue_families(),
+      [this, surface](const QueueFamily& qfam) { return present_support(surface, qfam.index); }
+    );
   }
 
   bool present_support(VkSurfaceKHR surface, uint32_t queue_family_idx) const {
@@ -303,6 +348,8 @@ public:
   }
 
 public:
+  // should this return pointers? PhysDevice is a wrapper around a vulkan handle (VkPhysicalDevice) 
+  // so it works this way but...  
   vector<PhysDevice> find_devices(function<bool(const PhysDevice&)> pred) {
     uint32_t size = 0;
     vkEnumeratePhysicalDevices(instance, &size, nullptr);
@@ -335,91 +382,141 @@ public:
   VkSurfaceKHR get() { return surface; }
 };
 
+VkDeviceQueueCreateInfo vk_queue_create_info(u32 family_index, const float* priority) {
+  VkDeviceQueueCreateInfo res{};
+  res.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  res.queueFamilyIndex = family_index;
+  res.queueCount = 1;
+  res.pQueuePriorities = priority;
+  return res;
+}
 
-class BetterTriangle {
-  
+class LogicalDevice {
+  VkDevice device;
+  VkQueue graphics_q;
+  VkQueue present_q;
+
 public:
-  BetterTriangle() {
+  ~LogicalDevice() {
+    vkDestroyDevice(device, nullptr);
+  }
+
+  LogicalDevice(
+    VkPhysicalDevice physical_device, 
+    const QueueFamily& graphics_queue_family,
+    const QueueFamily& present_queue_family
+  ) {
+    VkDeviceCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+
+    float default_q_priority = 1.0f;
+    // the use of to_vector here is because we need a vector result, and result type is determined based on
+    // the type of input collection. 
+    // but... internally map() also uses push_back which isn't available for set()... 
+    vector<VkDeviceQueueCreateInfo> queue_create_infos = map(
+      to_vector(set<u32> { graphics_queue_family.index, present_queue_family.index }),
+      [&default_q_priority](u32 qfam_index) { return vk_queue_create_info(qfam_index, &default_q_priority); }
+    );
+
+    create_info.pQueueCreateInfos = queue_create_infos.data();
+    create_info.queueCreateInfoCount = queue_create_infos.size();
+
+    VkPhysicalDeviceFeatures features{};
+    create_info.pEnabledFeatures = &features;
+
+    // TODO hardcoded 
+    vector<const char*> device_extensions = {
+      VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+    };
+    create_info.enabledExtensionCount = device_extensions.size();
+    create_info.ppEnabledExtensionNames = device_extensions.data();
+
+    // TODO hardcoded
+    vector<const char*> validation_layers = {
+      "VK_LAYER_KHRONOS_validation"
+    };
+    create_info.enabledLayerCount = validation_layers.size();
+    create_info.ppEnabledLayerNames = validation_layers.data();
+
+    if (vkCreateDevice(physical_device, &create_info, nullptr, &device) != VK_SUCCESS) {
+      throw runtime_error("failed to create logical device");
+    }
+
+    vkGetDeviceQueue(device, graphics_queue_family.index, 0, &graphics_q);
+    vkGetDeviceQueue(device, present_queue_family.index, 0, &present_q);
   }
 };
 
+class BetterTriangle {
+public:
+  ptr<Window> window;
+  ptr<VulkanInstance> instance;
+  ptr<Surface> surface; 
 
-int main() {
-  try {
-    auto window = mk_ptr<Window>(800, 600);
-    auto instance = mk_ptr<VulkanInstance>(true);
-    auto surface = mk_ptr<Surface>(instance, window);
+  // this devision of pointers and non-pointers... ugh
+  // depends on your understanding of whether the object has RAII associated with it
+  // or if, like PhysDevice, it's just a wrapper around a Vulkan handle (ptr) that 
+  // wraps it in a nicer interface
+  ptr<PhysDevice> physical_device; 
 
+  ptr<LogicalDevice> device;
+
+  static ptr<PhysDevice> find_physical_device(ptr<VulkanInstance> instance, ptr<Surface> surface) {
     auto suitable_physical_devices = instance->find_devices([surface](const PhysDevice& device) {
-      if (
-        device.surface_formats(surface->get()).empty() ||
-        device.surface_present_modes(surface->get()).empty()
-      ) {
-        return false;
+      return 
+        !device.surface_formats(surface->get()).empty() &&
+        !device.surface_present_modes(surface->get()).empty() &&
+        !device.graphics_queue_families().empty() &&
+        !device.present_queue_families(surface->get()).empty() &&
+        device.supports_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
       }
-
-      auto qfams = device.queue_families();
-      bool graphics = false, present = false;
-      for (size_t i = 0; i < qfams.size() && (!graphics || !present); ++i) {
-        graphics |= qfams[i].queueFlags & VK_QUEUE_GRAPHICS_BIT;
-        present |= device.present_support(surface->get(), static_cast<uint32_t>(i));
-
-        if (graphics && present) {
-          break;
-        }
-      }
-
-      if (!graphics || !present) {
-        return false;
-      }
-
-      if (!device.supports_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)) {
-        return false;
-      }
-
-      return true;
-    });
+    );
 
     if (suitable_physical_devices.empty()) {
       throw runtime_error("failed to find suitable GPU");
     }
 
     cout << format(
-      "suitable physical devices: {}\n", 
+      "suitable physical devices: {}\n",
       to_str(map(suitable_physical_devices, [](auto d) { return d.name(); }), "\n\t", ",\n\t")
     );
 
-    auto physical_device = suitable_physical_devices.back();
+    // should be ok? The vulkan handle is copied over...
+    return mk_ptr<PhysDevice>(suitable_physical_devices.back());
+  }
+  
+public:
+  BetterTriangle(uint32_t height, uint32_t width) {
+    window = mk_ptr<Window>(height, width);
+    instance = mk_ptr<VulkanInstance>(true);
+    surface = mk_ptr<Surface>(instance, window);
 
-    optional<uint32_t> graphics_family;
-    optional<uint32_t> present_family;
-    auto qfams = physical_device.queue_families();
-    for (size_t i = 0; i < qfams.size(); ++i) {
-      auto ii = static_cast<uint32_t>(i);
+    physical_device = find_physical_device(instance, surface);
+    device = mk_ptr<LogicalDevice>(
+      physical_device->get(), 
+      physical_device->graphics_queue_families().back(),
+      physical_device->present_queue_families(surface->get()).back()
+    );
 
-      if (!graphics_family.has_value() && qfams[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-        graphics_family = ii;
-      }
-      
-      if (!present_family.has_value() && physical_device.present_support(surface->get(), ii)) {
-        present_family = ii;
-      }
-
-      if (present_family.has_value() && graphics_family.has_value()) {
-        break;
-      }
-    }
-
-    if (!present_family.has_value()) {
-      throw runtime_error("no presentation family found");
-    }
-
-    if (!graphics_family.has_value()) {
-      throw runtime_error("no graphics family found");
-    }
+    cout << "logical device created!!\n";
+  }
+};
 
 
-    while (!window->should_close()) {
+int main() {
+  try {
+    auto triangle = mk_ptr<BetterTriangle>(800, 600);
+
+    /*
+    * 
+    * to create logical device:
+    * - need physical device 
+    * - validation layers 
+    * - need queue create info, which are then also used to GetDeviceQueue
+    */
+
+
+    while (!triangle->window->should_close()) {
       glfwPollEvents();
       //drawFrame();
     }

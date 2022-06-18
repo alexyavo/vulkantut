@@ -24,6 +24,8 @@
 namespace utils {
   using namespace std;
 
+  using u32 = uint32_t;
+
   template<typename T> using ptr = shared_ptr<T>;
 
   template<typename T, typename... Args>
@@ -40,8 +42,28 @@ namespace utils {
 
   template<typename T, typename F, template <typename...> typename C, typename... Args>
   decltype(auto) map(const C<T, Args...>& coll, F f) {
-    C<decltype(f(*coll.begin()))> res(coll.size());
-    transform(coll.cbegin(), coll.cend(), res.begin(), f);
+    // pretty sure this requires the result type to have an empty ctor (in my case, PhysDevice was causing the issue)
+    // alternative would be to declare res without size and use push_back?
+    // 
+    //C<decltype(f(*coll.begin()))> res(coll.size());
+    //transform(coll.cbegin(), coll.cend(), res.begin(), f);
+
+    C<decltype(f(*coll.begin()))> res{};
+    for (auto it = coll.cbegin(); it != coll.cend(); ++it) {
+      res.push_back(f(*it));
+    }
+
+    return res;
+  }
+
+  // map with index, f(index, element_at_index)
+  template<typename T, typename F, template <typename...> typename C, typename... Args>
+  decltype(auto) map_enumerated(const C<T, Args...>& coll, F f) {
+    C<decltype(f(0, *coll.begin()))> res{};
+    for (auto it = coll.cbegin(); it != coll.cend(); ++it) {
+      auto idx = static_cast<u32>(it - coll.cbegin());
+      res.push_back(f(idx, *it));
+    }
     return res;
   }
 
@@ -55,6 +77,13 @@ namespace utils {
   template<typename T>
   set<T> to_set(const vector<T>& vec) {
     return set(vec.cbegin(), vec.cend());
+  }
+
+  template<typename T>
+  vector<T> to_vector(const set<T>& s) {
+    vector<T> res;
+    std::copy(s.cbegin(), s.cend(), std::back_inserter(res));
+    return res;
   }
 
   template<typename T>
