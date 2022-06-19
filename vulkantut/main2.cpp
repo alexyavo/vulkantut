@@ -453,6 +453,14 @@ public:
     vkGetDeviceQueue(device, graphics_queue_family.index, 0, &graphics_q);
     vkGetDeviceQueue(device, present_queue_family.index, 0, &present_q);
   }
+
+  void wait_fences(vector<VkFence>& fences) {
+    vkWaitForFences(device, fences.size(), fences.data(), VK_TRUE, UINT64_MAX);
+  }
+
+  void reset_fences(vector<VkFence>& fences) {
+    vkResetFences(device, fences.size(), fences.data());
+  }
 };
 
 class ImageView {
@@ -581,6 +589,8 @@ public:
   vector<VkImage> images;
   VkFormat format;
   VkExtent2D extent;
+
+  VkSwapchainKHR get() { return swapchain; }
 
   ~SwapChain() {
     vkDestroySwapchainKHR(device->get(), swapchain, nullptr);
@@ -938,6 +948,49 @@ public:
   }
 };
 
+class Sema {
+  ptr<LogicalDevice> device;
+  VkSemaphore sema;
+
+public:
+  VkSemaphore get() { return sema; }
+
+  Sema(ptr<LogicalDevice> device): device(device) {
+    VkSemaphoreCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    if (vkCreateSemaphore(device->get(), &create_info, nullptr, &sema) != VK_SUCCESS) {
+      throw runtime_error("failed to create semaphore");
+    }
+  }
+
+  ~Sema() {
+    vkDestroySemaphore(device->get(), sema, nullptr);
+  }
+};
+
+class Fence {
+  ptr<LogicalDevice> device;
+  VkFence fence;
+
+public:
+  VkFence get() { return fence; }
+
+  Fence(ptr<LogicalDevice> device): device(device) {
+    VkFenceCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    if (vkCreateFence(device->get(), &create_info, nullptr, &fence) != VK_SUCCESS) {
+      throw runtime_error("failed to create fence");
+    }
+  }
+
+  ~Fence() {
+    vkDestroyFence(device->get(), fence, nullptr);
+  }
+};
+
 class BetterTriangle {
 public:
   ptr<Window> window;
@@ -956,6 +1009,10 @@ public:
   ptr<RenderPass> renderpass;
   ptr<Command> command;
   ptr<GraphicsPipeline> pipeline;
+
+  ptr<Sema> image_available_sema;
+  ptr<Sema> render_finished_sema;
+  ptr<Fence> inflight_fence;
 
   static ptr<PhysDevice> find_physical_device(ptr<VulkanInstance> instance, ptr<Surface> surface) {
     auto suitable_physical_devices = instance->find_devices([surface](const PhysDevice& device) {
@@ -1013,14 +1070,84 @@ public:
     renderpass = mk_ptr<RenderPass>(device, swapchain->format);
     pipeline = mk_ptr<GraphicsPipeline>(swapchain, renderpass);
     command = mk_ptr<Command>(device, graphics_fam.index);
+
+    // probably stand to not be pointers? 
+    // others as well? what objects are we not passing around? except for swapchain, device, pipeline (maybe...?)
+    image_available_sema = mk_ptr<Sema>(device);
+    render_finished_sema = mk_ptr<Sema>(device);
+    inflight_fence = mk_ptr<Fence>(device);
   }
 
+  void drawFrame() {
+    // At a high level, rendering a frame in Vulkan consists of a common set of steps:
+    // - Wait for the previous frame to finish
+    // - Acquire an image from the swap chain
+    // - Record a command buffer which draws the scene onto that image
+    // - Submit the recorded command buffer
+    // - Present the swap chain image
+
+    vector<VkFence> fences { inflight_fence->get() };
+    device->wait_fences(fences);
+    device->reset_fences(fences);
+
+    uint32_t image_index;
+    vkAcquireNextImageKHR(device->get(), swapchain->get(), UINT64_MAX, image_available_sema->get(), VK_NULL_HANDLE, &image_index);
+    vkResetCommandBuffer(commandBuffer, 0);
+    recordCommandBuffer(commandBuffer, image_index);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+      throw std::runtime_error("failed to submit draw command buffer!");
+    }
+
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+
+    VkSwapchainKHR swapChains[] = { swapChain };
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapChains;
+
+    presentInfo.pImageIndices = &imageIndex;
+
+    vkQueuePresentKHR(presentQueue, &presentInfo);
+  }
+
+  void run() {
+    while (!window->should_close()) {
+      glfwPollEvents();
+      //drawFrame();
+    }
+
+    //vkDeviceWaitIdle(ldevice);
+  }
 };
 
 
 int main() {
   try {
     auto triangle = mk_ptr<BetterTriangle>(800, 600);
+    triangle->run();
+  } catch (const exception& ex) {
+    cerr << ex.what() << endl;
+    return EXIT_FAILURE;
+  }
 
     /*
     * 
@@ -1031,16 +1158,6 @@ int main() {
     */
 
 
-    while (!triangle->window->should_close()) {
-      glfwPollEvents();
-      //drawFrame();
-    }
-
-    //vkDeviceWaitIdle(ldevice);
-  } catch (const exception& ex) {
-    cerr << ex.what() << endl;
-    return EXIT_FAILURE;
-  }
 
   return EXIT_SUCCESS;
 }
