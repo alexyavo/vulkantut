@@ -393,11 +393,12 @@ VkDeviceQueueCreateInfo vk_queue_create_info(u32 family_index, const float* prio
 
 class LogicalDevice {
   VkDevice device;
-  VkQueue graphics_q;
-  VkQueue present_q;
 
 public:
   ptr<PhysDevice> physical_device;
+  
+  VkQueue graphics_q;
+  VkQueue present_q;
 
   VkDevice get() { return device; }
 
@@ -546,9 +547,9 @@ class Framebuffer {
   ptr<RenderPass> renderpass;
   ptr<ImageView> view;
 
+public:
   VkFramebuffer buffer;
 
-public:
   Framebuffer(
     ptr<LogicalDevice> device,
     ptr<RenderPass> renderpass, 
@@ -677,9 +678,9 @@ public:
     });
   }
 
-  //vector<ptr<Framebuffer>> framebuffers() {
-  //  return map(imageviews(), [this](auto& view) { return mk_ptr<Framebuffer>(device, render_pass, view, extent); });
-  //}
+  vector<ptr<Framebuffer>> framebuffers(ptr<RenderPass> renderpass) {
+    return map(imageviews(), [this, renderpass](auto& view) { return mk_ptr<Framebuffer>(device, renderpass, view, extent); });
+  }
 };
 
 class Shader {
@@ -735,9 +736,10 @@ public:
 class Command {
   ptr<LogicalDevice> device;
   VkCommandPool pool;
-  VkCommandBuffer buffer;
 
 public:
+  VkCommandBuffer buffer;
+
   Command(ptr<LogicalDevice> device, u32 qfam_index) : device(device) {
     VkCommandPoolCreateInfo pool_create_info{};
     pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -771,8 +773,9 @@ class GraphicsPipeline {
 
   VkPipelineLayout layout;
   VkPipeline pipeline;
-
 public:
+  VkPipeline get() { return pipeline; }
+
   GraphicsPipeline(ptr<SwapChain> swapchain, ptr<RenderPass> renderpass) 
     : swapchain(swapchain)
     , renderpass(renderpass)
@@ -1005,6 +1008,7 @@ public:
 
   ptr<LogicalDevice> device;
   ptr<SwapChain> swapchain;
+  vector<ptr<Framebuffer>> framebuffers;
 
   ptr<RenderPass> renderpass;
   ptr<Command> command;
@@ -1068,6 +1072,8 @@ public:
     //mk_ptr<Command>(); // Command(ptr<LogicalDevice> device, u32 qfam_index) : device(device) {
 
     renderpass = mk_ptr<RenderPass>(device, swapchain->format);
+    framebuffers = swapchain->framebuffers(renderpass);
+    
     pipeline = mk_ptr<GraphicsPipeline>(swapchain, renderpass);
     command = mk_ptr<Command>(device, graphics_fam.index);
 
@@ -1076,6 +1082,38 @@ public:
     image_available_sema = mk_ptr<Sema>(device);
     render_finished_sema = mk_ptr<Sema>(device);
     inflight_fence = mk_ptr<Fence>(device);
+  }
+
+  void recordCommandBuffer(VkCommandBuffer buffer, uint32_t imageIndex) {
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = 0; // Optional
+    beginInfo.pInheritanceInfo = nullptr; // Optional
+
+    if (vkBeginCommandBuffer(buffer, &beginInfo) != VK_SUCCESS) {
+      throw std::runtime_error("failed to begin recording command buffer!");
+    }
+
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = renderpass->get();
+    renderPassInfo.framebuffer = framebuffers[imageIndex]->buffer;
+
+    renderPassInfo.renderArea.offset = { 0, 0 };
+    renderPassInfo.renderArea.extent = swapchain->extent;
+
+    VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearColor;
+
+    vkCmdBeginRenderPass(buffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->get());
+    vkCmdDraw(buffer, 3, 1, 0, 0);
+    vkCmdEndRenderPass(buffer);
+
+    if (vkEndCommandBuffer(buffer) != VK_SUCCESS) {
+      throw std::runtime_error("failed to record command buffer!");
+    }
   }
 
   void drawFrame() {
@@ -1092,25 +1130,25 @@ public:
 
     uint32_t image_index;
     vkAcquireNextImageKHR(device->get(), swapchain->get(), UINT64_MAX, image_available_sema->get(), VK_NULL_HANDLE, &image_index);
-    vkResetCommandBuffer(commandBuffer, 0);
-    recordCommandBuffer(commandBuffer, image_index);
+    vkResetCommandBuffer(command->buffer, 0);
+    recordCommandBuffer(command->buffer, image_index);
 
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-    VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+    VkSemaphore waitSemaphores[] = { image_available_sema->get() };
     VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
     submitInfo.waitSemaphoreCount = 1;
     submitInfo.pWaitSemaphores = waitSemaphores;
     submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffer;
+    submitInfo.pCommandBuffers = &(command->buffer);
 
-    VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+    VkSemaphore signalSemaphores[] = { render_finished_sema->get() };
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
 
-    if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+    if (vkQueueSubmit(device->graphics_q, 1, &submitInfo, inflight_fence->get()) != VK_SUCCESS) {
       throw std::runtime_error("failed to submit draw command buffer!");
     }
 
@@ -1120,22 +1158,22 @@ public:
     presentInfo.waitSemaphoreCount = 1;
     presentInfo.pWaitSemaphores = signalSemaphores;
 
-    VkSwapchainKHR swapChains[] = { swapChain };
+    VkSwapchainKHR swapChains[] = { swapchain->get() };
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = swapChains;
 
-    presentInfo.pImageIndices = &imageIndex;
+    presentInfo.pImageIndices = &image_index;
 
-    vkQueuePresentKHR(presentQueue, &presentInfo);
+    vkQueuePresentKHR(device->present_q, &presentInfo);
   }
 
   void run() {
     while (!window->should_close()) {
       glfwPollEvents();
-      //drawFrame();
+      drawFrame();
     }
 
-    //vkDeviceWaitIdle(ldevice);
+    vkDeviceWaitIdle(device->get());
   }
 };
 
