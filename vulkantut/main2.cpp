@@ -1146,6 +1146,8 @@ public:
   vector<ptr<Frame>> frames;
   vector<ptr<Frame>>::iterator curr_frame;
 
+  const u32 max_frames_inflight = 2;
+
   static ptr<PhysDevice> find_physical_device(ptr<VulkanInstance> instance, ptr<Surface> surface) {
     auto suitable_physical_devices = instance->find_devices([surface](const PhysDevice& device) {
       return 
@@ -1203,15 +1205,11 @@ public:
     framebuffers = swapchain->framebuffers(renderpass);
     
     pipeline = mk_ptr<GraphicsPipeline>(swapchain, renderpass);
-    command = mk_ptr<Command>(device, graphics_fam.index, 2);
-    
-    //ptr<LogicalDevice> device,
-    //ptr<SwapChain> swapchain,
-    //ptr<GraphicsPipeline> pipeline,
-    //vector<ptr<Framebuffer>> framebuffers,
-    //VkCommandBuffer buffer
-    frames.push_back(mk_ptr<Frame>(device));
-    frames.push_back(mk_ptr<Frame>(device));
+    command = mk_ptr<Command>(device, graphics_fam.index, max_frames_inflight);
+
+    for (u32 i = 0; i < max_frames_inflight; ++i) {
+      frames.push_back(mk_ptr<Frame>(device));
+    }
 
     curr_frame = frames.begin();
   }
