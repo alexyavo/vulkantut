@@ -733,14 +733,14 @@ public:
   }
 };
 
-class Command {
+class Command : public enable_shared_from_this<Command> {
   ptr<LogicalDevice> device;
   VkCommandPool pool;
 
 public:
-  VkCommandBuffer buffer;
+  vector<VkCommandBuffer> buffers;
 
-  Command(ptr<LogicalDevice> device, u32 qfam_index) : device(device) {
+  Command(ptr<LogicalDevice> device, u32 qfam_index, u32 num_buffers) : device(device) {
     VkCommandPoolCreateInfo pool_create_info{};
     pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
     pool_create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -754,18 +754,31 @@ public:
     alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     alloc_info.commandPool = pool;
     alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    alloc_info.commandBufferCount = 1;
+    alloc_info.commandBufferCount = num_buffers;
 
-    if (vkAllocateCommandBuffers(device->get(), &alloc_info, &buffer) != VK_SUCCESS) {
-      throw std::runtime_error("failed to allocate command buffers!");
+    buffers.resize(num_buffers);
+    if (vkAllocateCommandBuffers(device->get(), &alloc_info, buffers.data()) != VK_SUCCESS) {
+      throw std::runtime_error("failed to allocate command buffers");
     }
   }
 
+  VkCommandBuffer get_buffer(u32 i) { return buffers[i]; }
+
   ~Command() {
-    vkFreeCommandBuffers(device->get(), pool, 1, &buffer);
+    //command buffers are freed for us when we free the command pool (?)
+    //vkFreeCommandBuffers(device->get(), pool, buffers.size(), buffers.data());
+
     vkDestroyCommandPool(device->get(), pool, nullptr);
   }
 };
+
+//class CommandBuffer {
+//  VkCommandBuffer buffer;
+//public:
+//  VkCommandBuffer get() { return buffer; }
+//
+//  CommandBuffer(VkCommandBuffer buffer) : buffer(buffer) {}
+//};
 
 class GraphicsPipeline {
   ptr<SwapChain> swapchain;
@@ -994,6 +1007,122 @@ public:
   }
 };
 
+class Frame {
+  ptr<LogicalDevice> device;
+
+  ptr<Sema> image_available_sema;
+  ptr<Sema> render_finished_sema;
+  ptr<Fence> inflight_fence;
+
+public:
+  Frame(
+    ptr<LogicalDevice> device
+  ) : device(device)
+  { 
+    image_available_sema = mk_ptr<Sema>(device);
+    render_finished_sema = mk_ptr<Sema>(device);
+    inflight_fence = mk_ptr<Fence>(device);
+  }
+
+  ~Frame() {
+
+  }
+
+  void draw_frame(
+    ptr<RenderPass> renderpass,
+    ptr<SwapChain> swapchain,
+    ptr<GraphicsPipeline> pipeline,
+    vector<ptr<Framebuffer>> framebuffers,
+    VkCommandBuffer buffer
+  ) {
+    // At a high level, rendering a frame in Vulkan consists of a common set of steps:
+    // - Wait for the previous frame to finish
+    // - Acquire an image from the swap chain
+    // - Record a command buffer which draws the scene onto that image
+    // - Submit the recorded command buffer
+    // - Present the swap chain image
+
+    vector<VkFence> fences { inflight_fence->get() };
+    device->wait_fences(fences);
+    device->reset_fences(fences);
+
+    uint32_t image_index;
+    vkAcquireNextImageKHR(
+      device->get(),
+      swapchain->get(),
+      UINT64_MAX,
+      image_available_sema->get(),
+      VK_NULL_HANDLE,
+      &image_index
+    );
+
+    vkResetCommandBuffer(buffer, 0);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = 0; // Optional
+    beginInfo.pInheritanceInfo = nullptr; // Optional
+
+    if (vkBeginCommandBuffer(buffer, &beginInfo) != VK_SUCCESS) {
+      throw std::runtime_error("failed to begin recording command buffer!");
+    }
+
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = renderpass->get();
+    renderPassInfo.framebuffer = framebuffers[image_index]->buffer;
+
+    renderPassInfo.renderArea.offset = { 0, 0 };
+    renderPassInfo.renderArea.extent = swapchain->extent;
+
+    VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearColor;
+
+    vkCmdBeginRenderPass(buffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->get());
+    vkCmdDraw(buffer, 3, 1, 0, 0);
+    vkCmdEndRenderPass(buffer);
+
+    if (vkEndCommandBuffer(buffer) != VK_SUCCESS) {
+      throw std::runtime_error("failed to record command buffer!");
+    }
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    VkSemaphore waitSemaphores[] = { image_available_sema->get() };
+    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &buffer;
+
+    VkSemaphore signalSemaphores[] = { render_finished_sema->get() };
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    if (vkQueueSubmit(device->graphics_q, 1, &submitInfo, inflight_fence->get()) != VK_SUCCESS) {
+      throw std::runtime_error("failed to submit draw command buffer!");
+    }
+
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+
+    VkSwapchainKHR swapChains[] = { swapchain->get() };
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapChains;
+
+    presentInfo.pImageIndices = &image_index;
+
+    vkQueuePresentKHR(device->present_q, &presentInfo);
+  }
+};
+
 class BetterTriangle {
 public:
   ptr<Window> window;
@@ -1014,9 +1143,8 @@ public:
   ptr<Command> command;
   ptr<GraphicsPipeline> pipeline;
 
-  ptr<Sema> image_available_sema;
-  ptr<Sema> render_finished_sema;
-  ptr<Fence> inflight_fence;
+  vector<ptr<Frame>> frames;
+  vector<ptr<Frame>>::iterator curr_frame;
 
   static ptr<PhysDevice> find_physical_device(ptr<VulkanInstance> instance, ptr<Surface> surface) {
     auto suitable_physical_devices = instance->find_devices([surface](const PhysDevice& device) {
@@ -1075,102 +1203,34 @@ public:
     framebuffers = swapchain->framebuffers(renderpass);
     
     pipeline = mk_ptr<GraphicsPipeline>(swapchain, renderpass);
-    command = mk_ptr<Command>(device, graphics_fam.index);
+    command = mk_ptr<Command>(device, graphics_fam.index, 2);
+    
+    //ptr<LogicalDevice> device,
+    //ptr<SwapChain> swapchain,
+    //ptr<GraphicsPipeline> pipeline,
+    //vector<ptr<Framebuffer>> framebuffers,
+    //VkCommandBuffer buffer
+    frames.push_back(mk_ptr<Frame>(device));
+    frames.push_back(mk_ptr<Frame>(device));
 
-    // probably stand to not be pointers? 
-    // others as well? what objects are we not passing around? except for swapchain, device, pipeline (maybe...?)
-    image_available_sema = mk_ptr<Sema>(device);
-    render_finished_sema = mk_ptr<Sema>(device);
-    inflight_fence = mk_ptr<Fence>(device);
-  }
-
-  void recordCommandBuffer(VkCommandBuffer buffer, uint32_t imageIndex) {
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = 0; // Optional
-    beginInfo.pInheritanceInfo = nullptr; // Optional
-
-    if (vkBeginCommandBuffer(buffer, &beginInfo) != VK_SUCCESS) {
-      throw std::runtime_error("failed to begin recording command buffer!");
-    }
-
-    VkRenderPassBeginInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = renderpass->get();
-    renderPassInfo.framebuffer = framebuffers[imageIndex]->buffer;
-
-    renderPassInfo.renderArea.offset = { 0, 0 };
-    renderPassInfo.renderArea.extent = swapchain->extent;
-
-    VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearColor;
-
-    vkCmdBeginRenderPass(buffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->get());
-    vkCmdDraw(buffer, 3, 1, 0, 0);
-    vkCmdEndRenderPass(buffer);
-
-    if (vkEndCommandBuffer(buffer) != VK_SUCCESS) {
-      throw std::runtime_error("failed to record command buffer!");
-    }
-  }
-
-  void drawFrame() {
-    // At a high level, rendering a frame in Vulkan consists of a common set of steps:
-    // - Wait for the previous frame to finish
-    // - Acquire an image from the swap chain
-    // - Record a command buffer which draws the scene onto that image
-    // - Submit the recorded command buffer
-    // - Present the swap chain image
-
-    vector<VkFence> fences { inflight_fence->get() };
-    device->wait_fences(fences);
-    device->reset_fences(fences);
-
-    uint32_t image_index;
-    vkAcquireNextImageKHR(device->get(), swapchain->get(), UINT64_MAX, image_available_sema->get(), VK_NULL_HANDLE, &image_index);
-    vkResetCommandBuffer(command->buffer, 0);
-    recordCommandBuffer(command->buffer, image_index);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-    VkSemaphore waitSemaphores[] = { image_available_sema->get() };
-    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = waitSemaphores;
-    submitInfo.pWaitDstStageMask = waitStages;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &(command->buffer);
-
-    VkSemaphore signalSemaphores[] = { render_finished_sema->get() };
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = signalSemaphores;
-
-    if (vkQueueSubmit(device->graphics_q, 1, &submitInfo, inflight_fence->get()) != VK_SUCCESS) {
-      throw std::runtime_error("failed to submit draw command buffer!");
-    }
-
-    VkPresentInfoKHR presentInfo{};
-    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-
-    presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = signalSemaphores;
-
-    VkSwapchainKHR swapChains[] = { swapchain->get() };
-    presentInfo.swapchainCount = 1;
-    presentInfo.pSwapchains = swapChains;
-
-    presentInfo.pImageIndices = &image_index;
-
-    vkQueuePresentKHR(device->present_q, &presentInfo);
+    curr_frame = frames.begin();
   }
 
   void run() {
     while (!window->should_close()) {
       glfwPollEvents();
-      drawFrame();
+
+      (*curr_frame)->draw_frame(
+        renderpass,
+        swapchain,
+        pipeline,
+        framebuffers,
+        command->get_buffer(curr_frame - frames.begin())
+      );
+
+      if (++curr_frame == frames.end()) {
+        curr_frame = frames.begin();
+      }
     }
 
     vkDeviceWaitIdle(device->get());
@@ -1186,16 +1246,6 @@ int main() {
     cerr << ex.what() << endl;
     return EXIT_FAILURE;
   }
-
-    /*
-    * 
-    * to create logical device:
-    * - need physical device 
-    * - validation layers 
-    * - need queue create info, which are then also used to GetDeviceQueue
-    */
-
-
 
   return EXIT_SUCCESS;
 }
