@@ -144,10 +144,27 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="main2.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Command.h" />
+    <ClInclude Include="Fence.h" />
+    <ClInclude Include="Frame.h" />
+    <ClInclude Include="Framebuffer.h" />
+    <ClInclude Include="GraphicsPipeline.h" />
+    <ClInclude Include="ImageView.h" />
+    <ClInclude Include="LogicalDevice.h" />
+    <ClInclude Include="PhysDevice.h" />
+    <ClInclude Include="QueueFamily.h" />
+    <ClInclude Include="RenderPass.h" />
+    <ClInclude Include="Sema.h" />
+    <ClInclude Include="Shader.h" />
+    <ClInclude Include="Surface.h" />
+    <ClInclude Include="Swapchain.h" />
     <ClInclude Include="utils.h" />
+    <ClInclude Include="vk_utils.h" />
+    <ClInclude Include="VulkanInstance.h" />
+    <ClInclude Include="vulkan_include.h" />
+    <ClInclude Include="Window.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
