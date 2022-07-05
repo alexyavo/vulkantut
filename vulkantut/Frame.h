@@ -32,10 +32,10 @@ public:
   }
 
   ~Frame() {
-
+    cout << "~Frame()\n";
   }
 
-  VkResult draw_frame(
+  VkResult draw(
     ptr<RenderPass> renderpass,
     ptr<Swapchain> swapchain,
     ptr<GraphicsPipeline> pipeline,

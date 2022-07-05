@@ -11,6 +11,7 @@ using namespace std;
 using namespace utils;
 
 class GraphicsPipeline {
+  ptr<LogicalDevice> device;
   ptr<Swapchain> swapchain;
   ptr<RenderPass> renderpass;
 
@@ -19,8 +20,9 @@ class GraphicsPipeline {
 public:
   VkPipeline get() { return pipeline; }
 
-  GraphicsPipeline(ptr<Swapchain> swapchain, ptr<RenderPass> renderpass) 
-    : swapchain(swapchain)
+  GraphicsPipeline(ptr<LogicalDevice> device, ptr<Swapchain> swapchain, ptr<RenderPass> renderpass) 
+    : device(device)
+    , swapchain(swapchain)
     , renderpass(renderpass)
   {
     cout << "GraphicsPipeline() ctor\n";
@@ -154,15 +156,15 @@ public:
     pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
     pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
 
-    if (vkCreatePipelineLayout(swapchain->device->get(), &pipelineLayoutInfo, nullptr, &layout) != VK_SUCCESS) {
+    if (vkCreatePipelineLayout(device->get(), &pipelineLayoutInfo, nullptr, &layout) != VK_SUCCESS) {
       throw runtime_error("failed to create pipeline layout!");
     }
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 
-    Shader vert(swapchain->device, "shaders/vert.spv");
-    Shader frag(swapchain->device, "shaders/frag.spv");
+    Shader vert(device, "shaders/vert.spv");
+    Shader frag(device, "shaders/frag.spv");
     VkPipelineShaderStageCreateInfo stages[] = {
       vert.pipeline_stage(VK_SHADER_STAGE_VERTEX_BIT), 
       frag.pipeline_stage(VK_SHADER_STAGE_FRAGMENT_BIT) 
@@ -184,14 +186,14 @@ public:
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
     pipelineInfo.basePipelineIndex = -1; // Optional
 
-    if (vkCreateGraphicsPipelines(swapchain->device->get(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
+    if (vkCreateGraphicsPipelines(device->get(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline) != VK_SUCCESS) {
       throw runtime_error("failed to create graphics pipeline!");
     }
   }
 
   ~GraphicsPipeline() {
     cout << "~GraphicsPipeline\n";
-    vkDestroyPipelineLayout(swapchain->device->get(), layout, nullptr);
-    vkDestroyPipeline(swapchain->device->get(), pipeline, nullptr);
+    vkDestroyPipelineLayout(device->get(), layout, nullptr);
+    vkDestroyPipeline(device->get(), pipeline, nullptr);
   }
 };

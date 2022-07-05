@@ -20,7 +20,7 @@ class Window {
   }
 
 public:
-  const int w, h;
+  int w, h;
 
   GLFWwindow* get() { return glfw_window; }
 
@@ -38,6 +38,7 @@ public:
   }
 
   ~Window() {
+    cout << "~Window\n";
     glfwDestroyWindow(glfw_window);
     glfwTerminate();
   }
@@ -46,5 +47,13 @@ public:
     auto res = resized;
     resized = false;
     return res;
+  }
+
+  void wait_minimized() {
+    glfwGetFramebufferSize(glfw_window, &w, &h);
+    while (w == 0 || h == 0) {
+      glfwGetFramebufferSize(glfw_window, &w, &h);
+      glfwWaitEvents();
+    }
   }
 };

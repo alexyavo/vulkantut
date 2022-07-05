@@ -1,6 +1,7 @@
 #pragma once
 
 #include "LogicalDevice.h"
+#include "Swapchain.h"
 
 #include "vulkan_include.h"
 #include "utils.h"
@@ -12,9 +13,17 @@ using namespace utils;
 class ImageView {
   VkImageView view;
   ptr<LogicalDevice> device;
+  ptr<Swapchain> swapchain;
 
 public:
-  ImageView(ptr<LogicalDevice> device, VkImage image, VkFormat format) : device(device) {
+  ImageView(
+    ptr<LogicalDevice> device,
+    ptr<Swapchain> swapchain,
+    VkImage image,
+    VkFormat format
+  ) : device(device)
+    , swapchain(swapchain)
+  {
     VkImageViewCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 

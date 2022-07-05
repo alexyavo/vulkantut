@@ -1,9 +1,7 @@
 #pragma once
 
 #include "LogicalDevice.h"
-#include "ImageView.h"
 #include "RenderPass.h"
-#include "Framebuffer.h"
 
 #include "vulkan_include.h"
 #include "utils.h"
@@ -12,13 +10,19 @@
 using namespace std;
 using namespace utils;
 
-
+/***
+ * swapchain == list of image buffers that are eventually displayed to the user
+ * 
+ *   imageviews
+ *   framebuffers (uses imageviews)
+ */
 class Swapchain {
 public:
   ptr<LogicalDevice> device;
+  ptr<Surface> surface; // only need surface to create the swapchain, so capture ptr to 
+                        // create clear chain of dependencies?
 
   VkSwapchainKHR swapchain;
-  vector<VkImage> images;
   VkFormat format;
   VkExtent2D extent;
 
@@ -29,20 +33,18 @@ public:
     vkDestroySwapchainKHR(device->get(), swapchain, nullptr);
   }
 
-  // convention:
-  // pass what you mean to store a ref to internally by ptr
-  // pass vk handles you don't intend to use / store outside of ctor by direct type
-  // pass const ref to objects you need the wrapper functions for
-  // this is fucked tho, better to not pass vk handles at all..
-  Swapchain(ptr<LogicalDevice> device, VkSurfaceKHR surface): device(device) {
+  Swapchain(ptr<LogicalDevice> device, ptr<Surface> surface)
+    : device(device)
+    , surface(surface)
+  {
     cout << "SwapChain() ctor\n";
 
     VkSwapchainCreateInfoKHR create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    create_info.surface = surface;
+    create_info.surface = surface->get();
 
-    auto surface_formats = device->physical_device->surface_formats(surface);
-    auto surface_format= find(
+    auto surface_formats = device->physical_device->surface_formats(surface->get());
+    auto surface_format = find(
       surface_formats,
       [](const VkSurfaceFormatKHR& fmt) {
         return
@@ -55,7 +57,7 @@ public:
     create_info.imageFormat = surface_format.format;
     create_info.imageColorSpace = surface_format.colorSpace;
 
-    auto surface_capabilities = device->physical_device->surface_capabilities(surface); 
+    auto surface_capabilities = device->physical_device->surface_capabilities(surface->get());
 
     // TODO (?)
     extent = surface_capabilities.currentExtent;
@@ -88,7 +90,7 @@ public:
     // really need to be able to read these pixels back and get predictable results,
     // you'll get the best performance by enabling clipping.
     create_info.presentMode = find(
-      device->physical_device->surface_present_modes(surface),
+      device->physical_device->surface_present_modes(surface->get()),
       [](const VkPresentModeKHR& mode) { return mode == VK_PRESENT_MODE_MAILBOX_KHR; }
     ).value_or(VK_PRESENT_MODE_FIFO_KHR);
 
@@ -98,21 +100,26 @@ public:
     if (vkCreateSwapchainKHR(device->get(), &create_info, nullptr, &swapchain) != VK_SUCCESS) {
       throw runtime_error("failed to create swap chain");
     }
-
-    u32 images_size;
-    vkGetSwapchainImagesKHR(device->get(), swapchain, &images_size, nullptr);
-    images.resize(images_size);
-
-    vkGetSwapchainImagesKHR(device->get(), swapchain, &images_size, images.data());
   }
 
-  vector<ptr<ImageView>> imageviews() {
-    return map(images, [this](const VkImage& image) {
-      return mk_ptr<ImageView>(device, image, format);
-    });
-  }
+  //vector<ptr<ImageView>> imageviews() {
+  //  vector<VkImage> images;
+  //  
+  //  u32 images_size;
+  //  vkGetSwapchainImagesKHR(device->get(), swapchain, &images_size, nullptr);
+  //  images.resize(images_size);
 
-  vector<ptr<Framebuffer>> framebuffers(ptr<RenderPass> renderpass) {
-    return map(imageviews(), [this, renderpass](auto& view) { return mk_ptr<Framebuffer>(device, renderpass, view, extent); });
-  }
+  //  // TODO should this be freed in some way? 
+  //  vkGetSwapchainImagesKHR(device->get(), swapchain, &images_size, images.data());
+
+  //  return map(images, [this, images](const VkImage& image) {
+  //    return mk_ptr<ImageView>(device, shared_from_this(), images, image, format);
+  //  });
+  //}
+
+  //vector<ptr<Framebuffer>> framebuffers(ptr<RenderPass> renderpass) {
+  //  return map(imageviews(), [this, renderpass](auto& view) {
+  //    return mk_ptr<Framebuffer>(device, renderpass, view, extent);
+  //  });
+  //}
 };

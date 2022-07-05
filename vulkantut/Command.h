@@ -13,9 +13,9 @@ class Command {
   ptr<LogicalDevice> device;
   VkCommandPool pool;
 
-public:
   vector<VkCommandBuffer> buffers;
 
+public:
   Command(ptr<LogicalDevice> device, u32 qfam_index, u32 num_buffers) : device(device) {
     VkCommandPoolCreateInfo pool_create_info{};
     pool_create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;

@@ -9,39 +9,60 @@
 #include "GraphicsPipeline.h"
 #include "Frame.h"
 #include "Command.h"
+#include "ImageView.h"
 
 using namespace std;
 using namespace utils;
+
+
+vector<ptr<ImageView>> imageviews(ptr<LogicalDevice> device, ptr<Swapchain> swapchain) {
+  vector<VkImage> images;
+
+  u32 images_size;
+  vkGetSwapchainImagesKHR(device->get(), swapchain->get(), &images_size, nullptr);
+  images.resize(images_size);
+
+  // TODO should this be freed in some way? 
+  vkGetSwapchainImagesKHR(device->get(), swapchain->get(), &images_size, images.data());
+
+  return map(
+    images, 
+    [=](const VkImage& image) {
+      return mk_ptr<ImageView>(device, swapchain, image, swapchain->format);
+    }
+  );
+}
+
+vector<ptr<Framebuffer>> framebuffers(ptr<LogicalDevice> device, ptr<Swapchain> swapchain, ptr<RenderPass> renderpass) {
+  return map(
+    imageviews(device, swapchain), 
+    [=](auto& view) {
+      return mk_ptr<Framebuffer>(device, renderpass, view, swapchain->extent);
+    }
+  );
+}
 
 
 class BetterTriangle {
 public:
   ptr<Window> window;
   ptr<VulkanInstance> instance;
-  ptr<Surface> surface; 
-
-  // this devision of pointers and non-pointers... ugh
-  // depends on your understanding of whether the object has RAII associated with it
-  // or if, like PhysDevice, it's just a wrapper around a Vulkan handle (ptr) that 
-  // wraps it in a nicer interface
-  ptr<PhysDevice> physical_device; 
-
+  ptr<Surface> surface;
+  ptr<PhysDevice> physical_device;
   ptr<LogicalDevice> device;
   ptr<Swapchain> swapchain;
   vector<ptr<Framebuffer>> framebuffers;
-
   ptr<RenderPass> renderpass;
   ptr<Command> command;
   ptr<GraphicsPipeline> pipeline;
-
   vector<ptr<Frame>> frames;
   vector<ptr<Frame>>::iterator curr_frame;
 
-  const u32 max_frames_inflight = 1;
+  const u32 max_frames_inflight = 2;
 
   static ptr<PhysDevice> find_physical_device(ptr<VulkanInstance> instance, ptr<Surface> surface) {
     auto suitable_physical_devices = instance->find_devices([surface](const PhysDevice& device) {
-      return 
+      return
         !device.surface_formats(surface->get()).empty() &&
         !device.surface_present_modes(surface->get()).empty() &&
         !device.graphics_queue_families().empty() &&
@@ -65,15 +86,25 @@ public:
 
 private:
   void init_swapchain() {
-    device->wait_idle(); // resize issue...
     cout << "... initializing swap chain\n";
 
-    swapchain = mk_ptr<Swapchain>(device, surface->get());
+    window->wait_minimized(); 
+    device->wait_idle(); // this prevents destroying framebuffers that are being used...
+
+    // not sure which of these fuckers causes it, but without fully destroying these before
+    // recreating them, I get heap corruption (specifically happened when destroying swapchain,
+    // so maybe we can't have multiple swapchains at the same time or something?)
+    swapchain = nullptr;
+    renderpass = nullptr;
+    framebuffers.clear();
+    pipeline = nullptr;
+
+    swapchain = mk_ptr<Swapchain>(device, surface);
     renderpass = mk_ptr<RenderPass>(device, swapchain->format);
-    framebuffers = swapchain->framebuffers(renderpass);
-    pipeline = mk_ptr<GraphicsPipeline>(swapchain, renderpass);
+    framebuffers = ::framebuffers(device, swapchain, renderpass);
+    pipeline = mk_ptr<GraphicsPipeline>(device, swapchain, renderpass);
   }
-  
+
 public:
   BetterTriangle(uint32_t height, uint32_t width) {
     window = mk_ptr<Window>(height, width);
@@ -81,11 +112,11 @@ public:
     surface = mk_ptr<Surface>(instance, window);
 
     physical_device = find_physical_device(instance, surface);
-    
+
     QueueFamily graphics_fam = physical_device->graphics_queue_families().back();
     QueueFamily present_fam = physical_device->present_queue_families(surface->get()).back();
     device = mk_ptr<LogicalDevice>(
-      physical_device, 
+      physical_device,
       graphics_fam,
       present_fam
     );
@@ -104,30 +135,21 @@ public:
     while (!window->should_close()) {
       glfwPollEvents();
 
-      VkResult draw_result = (*curr_frame)->draw_frame(
+      VkResult draw_result = (*curr_frame)->draw(
         renderpass,
         swapchain,
         pipeline,
         framebuffers,
         command->get_buffer(curr_frame - frames.begin())
       );
-      
-      switch (draw_result) {
-      case VK_SUCCESS:
-        break;
 
-      case VK_ERROR_OUT_OF_DATE_KHR:
-      case VK_SUBOPTIMAL_KHR:
-        cout << "VK_SUBOPTIMAL_KHR || VK_ERROR_OUT_OF_DATE_KHR\n";
+      if (draw_result == VK_ERROR_OUT_OF_DATE_KHR ||
+          draw_result == VK_SUBOPTIMAL_KHR ||
+          window->check_resize()
+      ) {
         init_swapchain();
-        continue;
-
-      default:
+      } else if (draw_result != VK_SUCCESS) {
         throw runtime_error("failed to present swap chain image");
-      }
-
-      if (window->check_resize()) {
-        init_swapchain();
       }
 
       if (++curr_frame == frames.end()) {
