@@ -2,6 +2,7 @@
 
 #include "Swapchain.h"
 #include "Shader.h"
+#include "Vertex.h"
 
 #include "vulkan_include.h"
 #include "utils.h"
@@ -29,10 +30,14 @@ public:
     // describes the format of the vertex data that will be passed to the vertex shader.
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.pVertexBindingDescriptions = nullptr; // Optional
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
-    vertexInputInfo.pVertexAttributeDescriptions = nullptr; // Optional
+    
+    auto bind_desc = Vertex::binding_desc();
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bind_desc;
+
+    auto attr_desc = Vertex::attr_desc();
+    vertexInputInfo.vertexAttributeDescriptionCount = attr_desc.size();
+    vertexInputInfo.pVertexAttributeDescriptions = attr_desc.data();
 
     // describes two things: what kind of geometry will be drawn from the
     // vertices and if primitive restart should be enabled

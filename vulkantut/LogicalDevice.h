@@ -86,4 +86,17 @@ public:
   void wait_idle() {
     vkDeviceWaitIdle(device);
   }
+
+  u32 find_mem_type(u32 type_filter, VkMemoryPropertyFlags props) {
+    VkPhysicalDeviceMemoryProperties memprops;
+    vkGetPhysicalDeviceMemoryProperties(physical_device->get(), &memprops);
+
+    for (u32 i = 0; i < memprops.memoryTypeCount; ++i) {
+      if ((type_filter & (1 << i)) && (memprops.memoryTypes[i].propertyFlags & props) == props) {
+        return i;
+      }
+    }
+
+    throw runtime_error("failed to find suitable memory type");
+  }
 };

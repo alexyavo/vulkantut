@@ -15,6 +15,7 @@ using namespace std;
 using namespace utils;
 
 
+
 vector<ptr<ImageView>> imageviews(ptr<LogicalDevice> device, ptr<Swapchain> swapchain) {
   vector<VkImage> images;
 
@@ -57,6 +58,8 @@ public:
   ptr<GraphicsPipeline> pipeline;
   vector<ptr<Frame>> frames;
   vector<ptr<Frame>>::iterator curr_frame;
+
+  ptr<VertexBuffer> vertices;
 
   const u32 max_frames_inflight = 2;
 
@@ -129,6 +132,15 @@ public:
     }
 
     curr_frame = frames.begin();
+
+    vertices = mk_ptr<VertexBuffer>(device, vector<Vertex> {
+      { {0.0f, -0.5f}, { 1.0f, 0.0f, 0.0f }},
+      { {0.5f, 0.5f}, {0.0f, 1.0f, 0.0f} },
+      { {-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f} }
+        //{ {0.0f, -0.5f}, { 1.0f, 1.0f, 1.0f }},
+        //{ {0.5f, 0.5f}, {0.0f, 1.0f, 0.0f} },
+        //{ {-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f} }
+    });
   }
 
   void run() {
@@ -140,7 +152,8 @@ public:
         swapchain,
         pipeline,
         framebuffers,
-        command->get_buffer(curr_frame - frames.begin())
+        command->get_buffer(curr_frame - frames.begin()),
+        vertices
       );
 
       if (draw_result == VK_ERROR_OUT_OF_DATE_KHR ||

@@ -146,6 +146,7 @@
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="VertexBuffer.h" />
     <ClInclude Include="Command.h" />
     <ClInclude Include="Fence.h" />
     <ClInclude Include="Frame.h" />
@@ -161,6 +162,7 @@
     <ClInclude Include="Surface.h" />
     <ClInclude Include="Swapchain.h" />
     <ClInclude Include="utils.h" />
+    <ClInclude Include="Vertex.h" />
     <ClInclude Include="vk_utils.h" />
     <ClInclude Include="VulkanInstance.h" />
     <ClInclude Include="vulkan_include.h" />

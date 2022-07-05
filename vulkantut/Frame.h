@@ -6,6 +6,7 @@
 #include "RenderPass.h"
 #include "Swapchain.h"
 #include "GraphicsPipeline.h"
+#include "VertexBuffer.h"
 
 #include "vulkan_include.h"
 #include "utils.h"
@@ -40,7 +41,8 @@ public:
     ptr<Swapchain> swapchain,
     ptr<GraphicsPipeline> pipeline,
     vector<ptr<Framebuffer>> framebuffers,
-    VkCommandBuffer buffer
+    VkCommandBuffer buffer,
+    ptr<VertexBuffer> vertices
   ) {
     // At a high level, rendering a frame in Vulkan consists of a common set of steps:
     // - Wait for the previous frame to finish
@@ -96,7 +98,12 @@ public:
 
     vkCmdBeginRenderPass(buffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->get());
-    vkCmdDraw(buffer, 3, 1, 0, 0);
+    
+    VkBuffer verticess[] = { vertices->get() };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(buffer, 0, 1, verticess, offsets);
+
+    vkCmdDraw(buffer, vertices->size(), 1, 0, 0);
     vkCmdEndRenderPass(buffer);
 
     if (vkEndCommandBuffer(buffer) != VK_SUCCESS) {
